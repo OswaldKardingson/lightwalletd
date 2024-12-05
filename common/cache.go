@@ -1,5 +1,5 @@
 // Copyright (c) 2019-2020 The Zcash developers
-// Copyright (c) 2019-2021 Pirate Chain developers
+// Copyright (c) 2019-2024 Pirate Chain developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -8,16 +8,16 @@ package common
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/binary"
 	"hash/fnv"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/PirateNetwork/lightwalletd/walletrpc"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // BlockCache contains a consecutive set of recent compact blocks in marshalled form.
@@ -30,6 +30,131 @@ type BlockCache struct {
 	latestHash              []byte  // hash of the most recent (highest height) block, for detecting reorgs.
 	mutex                   sync.RWMutex
 }
+
+// ---------- LRU Caching for Merkle Subtrees and Deltas ----------
+
+// LRUCache represents a thread-safe LRU cache
+type LRUCache struct {
+	capacity int
+	cache    map[string]*list.Element
+	list     *list.List
+	mutex    sync.RWMutex
+}
+
+type cacheEntry struct {
+	key   string
+	value interface{}
+}
+
+// NewLRUCache creates a new LRU cache with the given capacity
+func NewLRUCache(capacity int) *LRUCache {
+	if capacity <= 0 {
+		panic("LRUCache capacity must be greater than 0")
+	}
+	return &LRUCache{
+		capacity: capacity,
+		cache:    make(map[string]*list.Element),
+		list:     list.New(),
+	}
+}
+
+// Get retrieves a value from the cache and marks it as recently used
+func (c *LRUCache) Get(key string) (interface{}, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	if elem, ok := c.cache[key]; ok {
+		// Move the accessed element to the front (most recently used)
+		c.list.MoveToFront(elem)
+		return elem.Value.(*cacheEntry).value, true
+	}
+	return nil, false
+}
+
+// Put adds a value to the cache. If the key already exists, it updates the value and marks it as recently used.
+func (c *LRUCache) Put(key string, value interface{}) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if elem, ok := c.cache[key]; ok {
+		// Key exists: update the value and mark as recently used
+		elem.Value.(*cacheEntry).value = value
+		c.list.MoveToFront(elem)
+	} else {
+		// Key does not exist: add new entry
+		if c.list.Len() == c.capacity {
+			// Cache is full: evict the least recently used item
+			evicted := c.list.Back()
+			if evicted != nil {
+				c.list.Remove(evicted)
+				delete(c.cache, evicted.Value.(*cacheEntry).key)
+			}
+		}
+
+		// Add the new entry to the cache
+		entry := &cacheEntry{key: key, value: value}
+		elem := c.list.PushFront(entry)
+		c.cache[key] = elem
+	}
+}
+
+// Delete removes a key from the cache
+func (c *LRUCache) Delete(key string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if elem, ok := c.cache[key]; ok {
+		c.list.Remove(elem)
+		delete(c.cache, key)
+	}
+}
+
+// Clear removes all entries from the cache
+func (c *LRUCache) Clear() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.list.Init()
+	c.cache = make(map[string]*list.Element)
+}
+
+// ---------- Specialized Caches for Merkle Subtrees and Deltas ----------
+
+var (
+	merkleSubtreeCache *LRUCache
+	merkleDeltaCache   *LRUCache
+	once               sync.Once
+)
+
+// InitializeMerkleCaches initializes the LRU caches for Merkle subtrees and deltas
+func InitializeMerkleCaches(subtreeCapacity, deltaCapacity int) {
+	once.Do(func() {
+		merkleSubtreeCache = NewLRUCache(subtreeCapacity)
+		merkleDeltaCache = NewLRUCache(deltaCapacity)
+	})
+}
+
+// SetMerkleSubtreeCache stores a Merkle subtree in the cache
+func SetMerkleSubtreeCache(key string, value interface{}) {
+	merkleSubtreeCache.Put(key, value)
+}
+
+// GetMerkleSubtreeCache retrieves a Merkle subtree from the cache
+func GetMerkleSubtreeCache(key string) (interface{}, bool) {
+	return merkleSubtreeCache.Get(key)
+}
+
+// SetMerkleDeltaCache stores deltas in the cache
+func SetMerkleDeltaCache(key string, value interface{}) {
+	merkleDeltaCache.Put(key, value)
+}
+
+// GetMerkleDeltaCache retrieves deltas from the cache
+func GetMerkleDeltaCache(key string) (interface{}, bool) {
+	return merkleDeltaCache.Get(key)
+}
+
+// ---------- Existing BlockCache Logic Continues Below ----------
 
 // GetNextHeight returns the height of the lowest unobtained block.
 func (c *BlockCache) GetNextHeight() int {
@@ -216,7 +341,7 @@ func NewBlockCache(dbPath string, chainName string, startHeight int, syncFromHei
 	if err != nil {
 		Log.Fatal("open ", c.lengthsName, " failed: ", err)
 	}
-	lengths, err := ioutil.ReadFile(c.lengthsName)
+	lengths, err := os.ReadFile(c.lengthsName)
 	if err != nil {
 		Log.Fatal("read ", c.lengthsName, " failed: ", err)
 	}
@@ -398,12 +523,12 @@ func (c *BlockCache) GetLiteWalletBlockGroup(height int) *walletrpc.BlockID {
 	}
 
 	for groupLength < targetLength {
-		 	groupLength += c.blockLength(height)
-			height++
-			if height >= c.nextBlock {
-					height--
-					break
-			}
+		groupLength += c.blockLength(height)
+		height++
+		if height >= c.nextBlock {
+			height--
+			break
+		}
 	}
 
 	block := c.readBlock(height)
