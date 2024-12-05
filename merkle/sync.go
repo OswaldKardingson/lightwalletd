@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/PirateNetwork/lightwalletd/common"
@@ -38,6 +39,24 @@ type MerkleNode struct {
 type MerkleTree struct {
 	RootHash string
 	Nodes    []*MerkleNode
+}
+
+// InitializeMerkleFrontiers sets up the /merkle/sync endpoint and related functionality
+func InitializeMerkleFrontiers() error {
+	enableMerkleFrontiers := os.Getenv("ENABLE_MERKLE_FRONTIERS") == "true"
+
+	if !enableMerkleFrontiers {
+		log.Println("Merkle Frontiers functionality is disabled.")
+		return nil
+	}
+
+	log.Println("Initializing Merkle Frontiers...")
+
+	// Register the Merkle sync handler
+	http.HandleFunc("/merkle/sync", MerkleSyncHandler)
+
+	log.Println("Merkle Frontiers initialization completed.")
+	return nil
 }
 
 // MerkleSyncHandler handles the /merkle/sync endpoint
