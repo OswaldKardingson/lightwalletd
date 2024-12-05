@@ -6,6 +6,7 @@ import (
 
 	"github.com/PirateNetwork/lightwalletd/cmd"
 	"github.com/PirateNetwork/lightwalletd/common"
+	"github.com/PirateNetwork/lightwalletd/merkle" // Correct import for Merkle Frontiers
 )
 
 func main() {
@@ -21,6 +22,21 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer common.CloseDBConnection()
+
+	// Check if Merkle Frontiers feature is enabled
+	enableMerkleFrontiers := os.Getenv("ENABLE_MERKLE_FRONTIERS") == "true"
+	if enableMerkleFrontiers {
+		log.Println("Initializing Merkle Frontiers...")
+
+		// Initialize Merkle Frontiers components
+		err := merkle.InitializeMerkleFrontiers()
+		if err != nil {
+			log.Fatalf("Failed to initialize Merkle Frontiers: %v", err)
+		}
+		log.Println("Merkle Frontiers initialized successfully.")
+	} else {
+		log.Println("Merkle Frontiers is disabled. Running in standard mode.")
+	}
 
 	// Start the application
 	log.Println("LightwalletD server is starting...")
