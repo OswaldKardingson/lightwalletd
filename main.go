@@ -2,10 +2,12 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/PirateNetwork/lightwalletd/cmd"
 	"github.com/PirateNetwork/lightwalletd/common"
+	"github.com/PirateNetwork/lightwalletd/frontend"
 	"github.com/PirateNetwork/lightwalletd/merkle" // Correct import for Merkle Frontiers
 )
 
@@ -36,6 +38,16 @@ func main() {
 		log.Println("Merkle Frontiers initialized successfully.")
 	} else {
 		log.Println("Merkle Frontiers is disabled. Running in standard mode.")
+	}
+
+	// Register the HTTP endpoints
+	http.HandleFunc("/get_merkle_root", frontend.GetMerkleRootHandler)
+	http.HandleFunc("/get_merkle_proof", frontend.GetMerkleProofHandler)
+
+	// Start the HTTP server
+	log.Println("Starting HTTP server on :8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 
 	// Start the application
