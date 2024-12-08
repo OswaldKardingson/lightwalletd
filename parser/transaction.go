@@ -1,5 +1,5 @@
 // Copyright (c) 2019-2020 The Zcash developers
-// Copyright (c) 2019-2021 Pirate Chain developers
+// Copyright (c) 2019-2024 Pirate Chain developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -9,9 +9,9 @@ package parser
 import (
 	"fmt"
 
-	"github.com/pkg/errors"
 	"github.com/PirateNetwork/lightwalletd/parser/internal/bytestring"
 	"github.com/PirateNetwork/lightwalletd/walletrpc"
+	"github.com/pkg/errors"
 )
 
 type rawTransaction struct {
@@ -351,6 +351,14 @@ func (tx *Transaction) SetTxID(txid []byte) {
 func (tx *Transaction) GetDisplayHash() []byte {
 	// Convert to big-endian
 	return Reverse(tx.txID[:])
+}
+
+// GetHash returns the transaction hash in hex format (as required for MerkleFrontier).
+func (tx *Transaction) GetHash() string {
+	if tx.txID == nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", tx.txID) // Return the txID as a hex-encoded string
 }
 
 // GetEncodableHash returns the transaction hash in little-endian wire format order.
