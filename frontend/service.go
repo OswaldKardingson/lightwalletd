@@ -1,5 +1,5 @@
 // Copyright (c) 2019-2020 The Zcash developers
-// Copyright (c) 2019-2021 Pirate Chain developers
+// Copyright (c) 2019-2024 Pirate Chain developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -29,6 +30,55 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
+
+// Add Handlers for MerkleFrontier HTTP Endpoints
+
+// Handler for fetching the Merkle root of the current block.
+func GetMerkleRootHandler(w http.ResponseWriter, r *http.Request) {
+	block := parser.NewBlock() // Get the current block
+
+	root, err := block.GetMerkleRoot()
+	if err != nil {
+		http.Error(w, "Failed to fetch Merkle root: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]string{
+		"merkle_root": root,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// Handler for generating a Merkle proof for a given transaction.
+func GetMerkleProofHandler(w http.ResponseWriter, r *http.Request) {
+	block := parser.NewBlock() // Get the current block
+
+	txIndexParam := r.URL.Query().Get("tx_index")
+	if txIndexParam == "" {
+		http.Error(w, "Missing transaction index", http.StatusBadRequest)
+		return
+	}
+
+	txIndex, err := strconv.Atoi(txIndexParam)
+	if err != nil {
+		http.Error(w, "Invalid transaction index", http.StatusBadRequest)
+		return
+	}
+
+	proof, err := block.MerkleFrontier.GenerateProof(txIndex)
+	if err != nil {
+		http.Error(w, "Failed to generate proof: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"transaction_index": txIndex,
+		"merkle_proof":      proof,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
 
 type latencyCacheEntry struct {
 	timeNanos   int64
@@ -129,20 +179,31 @@ func (s *lwdStreamer) GetCurrentARRRPrice(ctx context.Context, in *walletrpc.Emp
 	return resp, nil
 }
 
+// Register the HTTP endpoints
+func RegisterHTTPEndpoints() {
+	http.HandleFunc("/get_merkle_root", GetMerkleRootHandler)
+	http.HandleFunc("/get_merkle_proof", GetMerkleProofHandler)
+}
+
+// NOTE: Ensure RegisterHTTPEndpoints is called in the HTTP server initialization logic,
+// such as in main.go or the server startup code:
+//
+// frontend.RegisterHTTPEndpoints()
+// http.ListenAndServe(":8080", nil)
 
 // Returns the last block in a group of predefined total size
 func (s *lwdStreamer) GetLiteWalletBlockGroup(ctx context.Context, id *walletrpc.BlockID) (*walletrpc.BlockID, error) {
 	latestBlock := s.cache.GetLatestHeight()
 
 	if latestBlock == -1 {
-			return nil, errors.New("Cache is empty. Server is probably not yet ready")
+		return nil, errors.New("Cache is empty. Server is probably not yet ready")
 	}
 
-	if int(id.Height) < 1	{
-			return nil, errors.New("Invalid block, must use height greater than 0")
+	if int(id.Height) < 1 {
+		return nil, errors.New("Invalid block, must use height greater than 0")
 	}
 
-  blockId := s.cache.GetLiteWalletBlockGroup(int(id.Height))
+	blockId := s.cache.GetLiteWalletBlockGroup(int(id.Height))
 	return blockId, nil
 }
 
