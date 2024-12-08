@@ -1,5 +1,5 @@
 // Copyright (c) 2019-2020 The Zcash developers
-// Copyright (c) 2019-2021 Pirate Chain developers
+// Copyright (c) 2019-2024 Pirate Chain developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -9,6 +9,7 @@ package parser
 import (
 	"fmt"
 
+	"github.com/PirateNetwork/lightwalletd/merkle" // Import the Merkle package
 	"github.com/PirateNetwork/lightwalletd/parser/internal/bytestring"
 	"github.com/PirateNetwork/lightwalletd/walletrpc"
 	"github.com/pkg/errors"
@@ -16,14 +17,18 @@ import (
 
 // Block represents a full block (not a compact block).
 type Block struct {
-	hdr    *BlockHeader
-	vtx    []*Transaction
-	height int
+	hdr            *BlockHeader
+	vtx            []*Transaction
+	height         int
+	MerkleFrontier *merkle.MerkleFrontier // Add a MerkleFrontier to the block
 }
 
 // NewBlock constructs a block instance.
 func NewBlock() *Block {
-	return &Block{height: -1}
+	return &Block{
+		height:         -1,
+		MerkleFrontier: merkle.NewMerkleFrontier(), // Initialize the MerkleFrontier
+	}
 }
 
 // GetVersion returns a block's version number (current 4)
@@ -153,6 +158,9 @@ func (b *Block) ParseFromSlice(data []byte) (rest []byte, err error) {
 			return nil, errors.Wrap(err, fmt.Sprintf("parsing transaction %d", i))
 		}
 		vtx = append(vtx, tx)
+
+		// Add the transaction to the Merkle Frontier
+		b.MerkleFrontier.AddTransaction(tx.GetHash())
 	}
 	if i < txCount {
 		return nil, errors.New("parsing block transactions: not enough data")
@@ -160,4 +168,9 @@ func (b *Block) ParseFromSlice(data []byte) (rest []byte, err error) {
 	b.hdr = hdr
 	b.vtx = vtx
 	return data, nil
+}
+
+// GetMerkleRoot returns the current Merkle root of the block's Merkle Frontier.
+func (b *Block) GetMerkleRoot() (string, error) {
+	return b.MerkleFrontier.GetRoot()
 }
