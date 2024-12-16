@@ -1,5 +1,5 @@
 // Copyright (c) 2019-2020 The Zcash developers
-// Copyright (c) 2019-2021 Pirate Chain developers
+// Copyright (c) 2019-2024 Pirate Chain developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -69,8 +69,8 @@ message LightdInfo {
     string buildDate = 10;
     string buildUser = 11;
     uint64 estimatedHeight = 12;        // less than tip height if pirated is syncing
-    string piratedBuild = 13;            // example: "v4.1.1-877212414"
-    string piratedSubversion = 14;       // example: "/MagicBean:4.1.1/"
+    string piratedBuild = 13;           // example: "v4.1.1-877212414"
+    string piratedSubversion = 14;      // example: "/MagicBean:4.1.1/"
 }
 
 // TransparentAddressBlockFilter restricts the results to the given address
@@ -158,6 +158,12 @@ message PriceResponse {
     double price = 3;
 }
 
+// Add support for Merkle Frontiers
+message MerkleFrontier {
+    uint64 blockHeight = 1;
+    bytes frontierData = 2; // Serialized Merkle Frontier
+}
+
 service CompactTxStreamer {
     rpc GetLiteWalletBlockGroup(BlockID) returns (BlockID) {}
     // Return the height of the tip of the best chain
@@ -166,6 +172,9 @@ service CompactTxStreamer {
     rpc GetBlock(BlockID) returns (CompactBlock) {}
     // Return a list of consecutive compact blocks
     rpc GetBlockRange(BlockRange) returns (stream CompactBlock) {}
+
+    // Add Merkle Frontiers support
+    rpc GetMerkleFrontier(BlockID) returns (MerkleFrontier) {}
 
     // Get the historical and current prices
     rpc GetARRRPrice(PriceRequest) returns (PriceResponse) {}
@@ -209,4 +218,11 @@ service CompactTxStreamer {
     rpc GetLightdInfo(Empty) returns (LightdInfo) {}
     // Testing-only, requires lightwalletd --ping-very-insecure (do not enable in production)
     rpc Ping(Duration) returns (PingResponse) {}
+
+    // Fetches the Merkle Frontier for a specified block.
+    rpc GetMerkleFrontier(BlockID) returns (MerkleFrontier);
+
+    // Returns blocks in compact form, now with optional Merkle Frontier inclusion.
+    rpc GetBlockRange(BlockRange) returns (stream CompactBlock);
+
 }
