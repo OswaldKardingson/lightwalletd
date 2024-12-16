@@ -117,7 +117,3 @@ Here is a comprehensive **changelog/feature list** comparing the `feature/merkle
 - **Backward Compatibility**: Non-Merkle Frontier wallets continue to work seamlessly.
 - **Enhanced Developer API**: New endpoints and gRPC methods for managing Merkle Frontier data.
 
----
-
-# **Conclusion**
-The `feature/merkle-frontiers` branch introduces robust Merkle Frontier support, enhances synchronization, and maintains full backward compatibility with existing wallets.
