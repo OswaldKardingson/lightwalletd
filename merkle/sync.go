@@ -16,11 +16,13 @@ import (
 
 // MerkleSyncResponse defines the structure of the response for /merkle/sync
 type MerkleSyncResponse struct {
-	ServerRoot string   `json:"serverRoot"`
-	Deltas     []string `json:"deltas"`
-	Proof      []Proof  `json:"proof"`
-	Page       int      `json:"page,omitempty"`
-	PageSize   int      `json:"pageSize,omitempty"`
+	ServerRoot  string   `json:"serverRoot"`
+	Deltas      []string `json:"deltas"`
+	Proof       []Proof  `json:"proof"`
+	Frontier    string   `json:"frontier,omitempty"`
+	Incremental bool     `json:"incremental"`
+	Page        int      `json:"page,omitempty"`
+	PageSize    int      `json:"pageSize,omitempty"`
 }
 
 // Proof represents a proof for a Merkle tree node
@@ -86,12 +88,17 @@ func MerkleSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Attempt to fetch the Merkle Frontier for incremental sync
+	frontierData, frontierExists := fetchFrontierForSync(serverTree.RootHash)
+
 	// If the client's tree matches the server's, return no deltas
 	if serverTree.Root() == localRoot {
 		response := MerkleSyncResponse{
-			ServerRoot: serverTree.Root(),
-			Deltas:     []string{},
-			Proof:      []Proof{},
+			ServerRoot:  serverTree.Root(),
+			Deltas:      []string{},
+			Proof:       []Proof{},
+			Frontier:    frontierData,
+			Incremental: frontierExists,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -111,11 +118,13 @@ func MerkleSyncHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Construct response
 	response := MerkleSyncResponse{
-		ServerRoot: serverTree.Root(),
-		Deltas:     paginatedDeltas,
-		Proof:      proofs,
-		Page:       page,
-		PageSize:   pageSize,
+		ServerRoot:  serverTree.Root(),
+		Deltas:      paginatedDeltas,
+		Proof:       proofs,
+		Frontier:    frontierData,
+		Incremental: frontierExists,
+		Page:        page,
+		PageSize:    pageSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -137,13 +146,11 @@ func PaginateDeltas(deltas []string, page int, pageSize int) []string {
 
 // LoadServerMerkleTree loads the Merkle tree from the database
 func LoadServerMerkleTree() (*MerkleTree, error) {
-	// Get the database connection
 	db, err := common.GetDBConnection()
 	if err != nil {
 		return nil, err
 	}
 
-	// Query the database for the Merkle tree data
 	var treeDataJSON string
 	err = db.QueryRow("SELECT tree_data FROM merkle_tree WHERE id = 1").Scan(&treeDataJSON)
 	if err != nil {
@@ -153,7 +160,6 @@ func LoadServerMerkleTree() (*MerkleTree, error) {
 		return nil, err
 	}
 
-	// Parse the JSON data into a Merkle tree structure
 	var treeData map[string]interface{}
 	err = json.Unmarshal([]byte(treeDataJSON), &treeData)
 	if err != nil {
@@ -161,6 +167,34 @@ func LoadServerMerkleTree() (*MerkleTree, error) {
 	}
 
 	return NewMerkleTreeFromData(treeData), nil
+}
+
+// fetchFrontierForSync retrieves the latest Merkle Frontier for incremental sync.
+func fetchFrontierForSync(rootHash string) (string, bool) {
+	db, err := common.GetDBConnection()
+	if err != nil {
+		log.Printf("Error connecting to the database: %v", err)
+		return "", false
+	}
+
+	var frontierJSON string
+	err = db.QueryRow(`
+		SELECT frontier_data
+		FROM merkle_frontiers
+		WHERE block_height = (
+			SELECT MAX(block_height) FROM merkle_frontiers
+		)
+	`).Scan(&frontierJSON)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Println("No Merkle Frontier found for sync.")
+			return "", false
+		}
+		log.Printf("Error fetching Merkle Frontier: %v", err)
+		return "", false
+	}
+
+	return frontierJSON, true
 }
 
 // NewMerkleTreeFromData creates a new Merkle tree from raw data
@@ -252,4 +286,48 @@ func hashFunction(data string) string {
 
 func hashEmptyNode() string {
 	return hashFunction("")
+}
+
+// SyncManager manages the synchronization and processing of blocks for Merkle updates
+type SyncManager struct {
+	cache *common.BlockCache
+}
+
+// NewSyncManager initializes a new SyncManager instance
+func NewSyncManager(cache *common.BlockCache) *SyncManager {
+	return &SyncManager{cache: cache}
+}
+
+// ProcessBlock processes a single block, updates the Merkle tree and frontiers
+func (sm *SyncManager) ProcessBlock(blockHeight int) error {
+	log.Printf("Processing block at height: %d", blockHeight)
+
+	// Fetch block data
+	blockData, err := common.GetBlockData(sm.cache, blockHeight)
+	if err != nil {
+		log.Printf("Failed to fetch block data: %v", err)
+		return err
+	}
+
+	// Update Merkle Tree
+	if err := UpdateMerkleTree(blockData); err != nil {
+		log.Printf("Failed to update Merkle tree: %v", err)
+		return err
+	}
+
+	log.Printf("Block %d processed successfully", blockHeight)
+	return nil
+}
+
+// SyncNewBlocks triggers ProcessBlock for each block during sync
+func (sm *SyncManager) SyncNewBlocks(startHeight, endHeight int) error {
+	for height := startHeight; height <= endHeight; height++ {
+		log.Printf("Syncing block %d", height)
+		if err := sm.ProcessBlock(height); err != nil {
+			log.Printf("Error processing block %d: %v", height, err)
+			return err
+		}
+	}
+	log.Println("Synchronization completed successfully")
+	return nil
 }
