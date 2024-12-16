@@ -113,3 +113,111 @@
 - **Backward Compatibility**: Non-Merkle Frontier wallets continue to work seamlessly.
 - **Enhanced Developer API**: New endpoints and gRPC methods for managing Merkle Frontier data.
 
+# **Requirements for launch:**
+
+---
+
+## **1. Ensuring Data Privacy**
+### **1.1 Incremental Sync and Merkle Frontiers**
+- **Current Status**: The implementation fetches incremental sync deltas and Merkle proofs.
+- **Concern**:
+  - Ensure that no private information (e.g., shielded transaction metadata, note commitments, or spending keys) is leaked during the incremental sync process.
+  - Merkle Frontiers only need to include hashes and publicly verifiable data **without exposing private state**.
+- **Action**:
+  - Confirm that the `deltas` being fetched and stored contain only public Merkle tree node data (e.g., hashes, block height, index) without revealing any private transaction data.
+
+---
+
+### **1.2 Handling Proofs for Shielded Transactions**
+- **Current Status**: Merkle proofs are generated for specific transactions.
+- **Concern**:
+  - Since the zk-SNARKs transactions are shielded by default, we must ensure that:
+    1. Proofs **only include necessary hashes** and not actual shielded data.
+    2. No identifying information about the sender, receiver, or amounts leaks during Merkle Frontier operations.
+- **Action**:
+  - Review the `GenerateProof` function in `merkle/sync.go` to ensure it excludes **any confidential information**.
+  - Validate that the proofs strictly follow the zk-SNARKs protocol requirements.
+
+---
+
+## **2. Validation of Incremental Data Integrity**
+### **2.1 Hash Validation**
+- **Current Status**: The sync manager processes blocks and validates Merkle deltas.
+- **Concern**:
+  - Since zk-SNARKs rely on cryptographic proofs, ensure that incremental sync deltas **retain data integrity**.
+  - The incremental sync data must strictly adhere to the Merkle root validation rules without exception.
+- **Action**:
+  - Validate that all Merkle roots and proofs align with the **on-chain state** without compromising privacy.
+  - Need additional tests to verify that invalid deltas or corrupted proofs are **rejected outright**.
+
+---
+
+### **2.2 Potential for Data Corruption**
+- **Concern**:
+  - If Merkle Frontier sync deltas are corrupted or tampered with, wallets could desynchronize or reveal partial private state.
+- **Action**:
+  - Introduce robust error handling and **fallback logic**:
+    - If an incremental sync fails or becomes inconsistent, the wallet should **automatically fall back to full block synchronization**.
+
+---
+
+## **3. Backward Compatibility for Non-Merkle Frontier Wallets**
+### **3.1 Sync Compatibility**
+- **Current Status**: The implementation checks if a wallet supports Merkle Frontiers and falls back to legacy sync.
+- **Concern**:
+  - Ensure that wallets that do **not support Merkle Frontiers** are not negatively impacted:
+    - Data integrity must be preserved for both legacy and updated clients.
+    - No additional overhead or data is sent to legacy wallets.
+- **Action**:
+  - Review the conditional logic in `GetBlockRange` and ensure the fallback behavior is well-tested.
+  - Monitor usage and identify clients syncing with and without Merkle Frontiers.
+
+---
+
+## **4. Database Security and Indexing**
+### **4.1 Merkle Frontier Table Security**
+- **Current Status**: A new table `merkle_frontiers` has been added.
+- **Concern**:
+  - Since the blockchain is private-by-default, ensure that the Merkle Frontier table:
+    1. Contains no sensitive data.
+    2. Is properly encrypted and secured if stored locally.
+- **Action**:
+  - Audit the table schema to ensure **only public hashes** are stored.
+  - Find and add database encryption where applicable.
+
+### **4.2 Indexing Performance**
+- **Concern**:
+  - Ensure that the `merkle_frontiers` table is indexed efficiently to handle frequent queries for incremental data.
+- **Action**:
+  - Add database indices on columns like `block_height` for faster lookup and retrieval.
+
+---
+
+## **5. Testing and Auditing**
+### **5.1 Security Audit**
+- **Concern**: Since zk-SNARKs systems involve cryptographic proofs, any implementation errors could compromise the chain’s privacy guarantees.
+- **Action**:
+  - Perform a **comprehensive security audit** of:
+    - Merkle Frontier sync logic.
+    - Data being fetched, stored, and transmitted to ensure no private data leaks.
+    - Database schema for the `merkle_frontiers` table.
+    - gRPC and HTTP endpoints.
+
+### **5.2 Unit and Integration Testing**
+- Add tests to ensure:
+  1. Merkle Frontiers do not leak private shielded data.
+  2. Legacy wallets sync seamlessly.
+  3. Incremental sync integrity (deltas, roots, and proofs) is maintained.
+
+---
+
+## **6. Monitoring and Metrics**
+- **Concern**: Monitoring the behavior of the new Merkle Frontier implementation in production.
+- **Action**:
+  - Introduce new metrics to:
+    - Track sync times for both Merkle Frontier-enabled and legacy wallets.
+    - Monitor errors or inconsistencies during incremental sync.
+
+---
+
+Once validated, tested, and audited, the branch can be deployed to production.
