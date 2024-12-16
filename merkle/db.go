@@ -63,6 +63,63 @@ func UpdateMerkleTreeInDB(tree *MerkleTree) error {
 	return nil
 }
 
+// FetchMerkleFrontier retrieves the Merkle Frontier for a given block height.
+func FetchMerkleFrontier(blockHeight int) (map[string]interface{}, error) {
+	db, err := common.GetDBConnection()
+	if err != nil {
+		log.Printf("Error connecting to the database: %v", err)
+		return nil, errors.New("database connection failed")
+	}
+
+	var frontierJSON string
+	err = db.QueryRow(`
+		SELECT frontier_data
+		FROM merkle_frontiers
+		WHERE block_height = $1
+	`, blockHeight).Scan(&frontierJSON)
+	if err != nil {
+		log.Printf("Error fetching Merkle Frontier from database: %v", err)
+		return nil, errors.New("failed to fetch Merkle Frontier")
+	}
+
+	var frontier map[string]interface{}
+	err = json.Unmarshal([]byte(frontierJSON), &frontier)
+	if err != nil {
+		log.Printf("Error unmarshalling Merkle Frontier: %v", err)
+		return nil, errors.New("invalid Merkle Frontier data")
+	}
+
+	return frontier, nil
+}
+
+// StoreMerkleFrontier inserts or updates the Merkle Frontier for a given block height.
+func StoreMerkleFrontier(blockHeight int, frontierData map[string]interface{}) error {
+	db, err := common.GetDBConnection()
+	if err != nil {
+		log.Printf("Error connecting to the database: %v", err)
+		return errors.New("database connection failed")
+	}
+
+	frontierJSON, err := json.Marshal(frontierData)
+	if err != nil {
+		log.Printf("Error marshalling Merkle Frontier data: %v", err)
+		return errors.New("failed to serialize Merkle Frontier data")
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO merkle_frontiers (block_height, frontier_data)
+		VALUES ($1, $2)
+		ON CONFLICT (block_height) DO UPDATE SET frontier_data = excluded.frontier_data
+	`, blockHeight, string(frontierJSON))
+	if err != nil {
+		log.Printf("Error storing Merkle Frontier in database: %v", err)
+		return errors.New("failed to store Merkle Frontier in database")
+	}
+
+	log.Printf("Merkle Frontier successfully stored for block height %d", blockHeight)
+	return nil
+}
+
 // serializeNodes converts MerkleNode slices into a format suitable for JSON serialization.
 func serializeNodes(nodes []*MerkleNode) []map[string]interface{} {
 	serialized := make([]map[string]interface{}, len(nodes))
@@ -73,56 +130,4 @@ func serializeNodes(nodes []*MerkleNode) []map[string]interface{} {
 		}
 	}
 	return serialized
-}
-
-// AddBlockToMerkleTree updates the Merkle tree with a new block and updates the database.
-func AddBlockToMerkleTree(blockData string) error {
-	// Fetch the current Merkle tree
-	treeData, err := FetchMerkleTreeFromDB()
-	if err != nil {
-		return err
-	}
-
-	// Reconstruct the Merkle tree from the database data
-	tree := NewMerkleTreeFromData(treeData)
-
-	// Add the new block to the tree
-	newNode := &MerkleNode{
-		Data:  hashFunction(blockData),
-		Index: len(tree.Nodes), // Assign the next index
-	}
-	tree.Nodes = append(tree.Nodes, newNode)
-
-	// Update the root hash
-	tree.RootHash = calculateRootHash(tree.Nodes)
-
-	// Save the updated tree back to the database
-	return UpdateMerkleTreeInDB(tree)
-}
-
-// calculateRootHash computes the Merkle root hash from the nodes
-func calculateRootHash(nodes []*MerkleNode) string {
-	if len(nodes) == 0 {
-		return hashEmptyNode()
-	}
-
-	// Rebuild the tree to compute the new root hash
-	level := nodes
-	for len(level) > 1 {
-		var nextLevel []*MerkleNode
-		for i := 0; i < len(level); i += 2 {
-			left := level[i]
-			var right *MerkleNode
-			if i+1 < len(level) {
-				right = level[i+1]
-			} else {
-				right = &MerkleNode{Data: hashEmptyNode()}
-			}
-
-			combinedHash := hashFunction(left.Data + right.Data)
-			nextLevel = append(nextLevel, &MerkleNode{Data: combinedHash})
-		}
-		level = nextLevel
-	}
-	return level[0].Data
 }
