@@ -1,7 +1,3 @@
-Here is a comprehensive **changelog/feature list** comparing the `feature/merkle-frontiers` branch and the `main` branch for **lightwalletd**. This document highlights all key changes, enhancements, and additions introduced by the new branch, which includes Merkle Frontiers support and related updates.
-
----
-
 # **Changelog: feature/merkle-frontiers Branch**
 **Project:** `lightwalletd`  
 **Compared Branches:**  
