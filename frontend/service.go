@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -24,11 +25,14 @@ import (
 	"time"
 
 	"github.com/PirateNetwork/lightwalletd/common"
+	"github.com/PirateNetwork/lightwalletd/merkle" //update if the merged location is changed
 	"github.com/PirateNetwork/lightwalletd/parser"
 	"github.com/PirateNetwork/lightwalletd/walletrpc"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // Add Handlers for MerkleFrontier HTTP Endpoints
@@ -93,6 +97,32 @@ type lwdStreamer struct {
 	walletrpc.UnimplementedCompactTxStreamerServer
 	latencyCache map[string]*latencyCacheEntry
 	latencyMutex sync.RWMutex
+}
+
+// New gRPC method: GetMerkleFrontier
+func (s *lwdStreamer) GetMerkleFrontier(ctx context.Context, id *walletrpc.BlockID) (*walletrpc.MerkleFrontier, error) {
+	if id == nil || id.Height == 0 {
+		return nil, status.Error(codes.InvalidArgument, "BlockID must specify a valid height")
+	}
+
+	// Fetch the Merkle Frontier from the database
+	frontierData, err := merkle.FetchMerkleFrontier(int(id.Height))
+	if err != nil {
+		log.Printf("Failed to fetch Merkle Frontier for block %d: %v", id.Height, err)
+		return nil, status.Errorf(codes.Internal, "Failed to fetch Merkle Frontier")
+	}
+
+	// Serialize the Merkle Frontier into JSON
+	frontierJSON, err := json.Marshal(frontierData)
+	if err != nil {
+		log.Printf("Failed to serialize Merkle Frontier: %v", err)
+		return nil, status.Errorf(codes.Internal, "Failed to serialize Merkle Frontier")
+	}
+
+	return &walletrpc.MerkleFrontier{
+		BlockHeight:  id.Height,
+		FrontierData: frontierJSON,
+	}, nil
 }
 
 // NewLwdStreamer constructs a gRPC context.
@@ -327,6 +357,20 @@ func (s *lwdStreamer) GetBlockRange(span *walletrpc.BlockRange, resp walletrpc.C
 	}
 
 	peerip := s.peerIPFromContext(resp.Context())
+	log.Printf("Received GetBlockRange request from %s, range: %d-%d", peerip, span.Start.Height, span.End.Height)
+
+	// Initialize the Merkle Sync Manager
+	syncManager := merkle.NewSyncManager(s.cache)
+
+	// Process each block before streaming
+	for height := int(span.Start.Height); height <= int(span.End.Height); height++ {
+		log.Printf("Syncing and processing block %d", height)
+		err := syncManager.ProcessBlock(height)
+		if err != nil {
+			log.Printf("Error processing block %d: %v", height, err)
+			return status.Errorf(codes.Internal, "Error processing block %d", height)
+		}
+	}
 
 	// Latency logging
 	go func() {
