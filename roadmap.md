@@ -1,4 +1,4 @@
-Development Roadmap
+# Development Roadmap
 
 ## Phase 1: Cryptographic Core
 1. **Adopt Zcash’s Libraries**:
@@ -32,6 +32,11 @@ Development Roadmap
 4. **State Caching**:
    - Implement server-side encrypted caching for commonly requested proofs and Merkle tree data to reduce computation for frequent sync requests.
 
+5. **Address Sync Issues on iOS/macOS**:
+   - Introduce lightweight checkpoints to optimize wallet synchronization.
+   - Use WebSocket-based real-time updates to prevent sync stalls.
+   - Enhance error handling to recover from interruptions without leaking metadata.
+
 ---
 
 ## Phase 3: Wallet Enhancements
@@ -45,6 +50,12 @@ Development Roadmap
 
 3. **Privacy-Enhancing Features**:
    - Implement local biometric encryption (e.g., FaceID, fingerprint) for secure wallet access without compromising privacy.
+
+4. **Address Book Feature**:
+   - Add an address book tab to wallets, allowing users to save addresses and names for future use.
+
+5. **UI/UX Improvements**:
+   - Refactor UI/UX for cross-platform compatibility, ensuring consistent performance on mobile, desktop, and macOS/iOS devices.
 
 ---
 
@@ -60,12 +71,14 @@ Development Roadmap
 3. **Batch Proof Verification**:
    - Implement batch proof verification for shielded transactions to reduce on-chain verification costs.
 
+4. **Enhanced Logging and Debugging**:
+   - Add detailed logging for sync processes, ensuring issues can be identified and resolved without compromising user privacy.
+
 ---
 
 ## Phase 5: Ecosystem Expansion
 1. **Browser Wallets**:
    - Finalize WebAssembly-compatible zk-SNARK libraries for browser wallets.
-   - Build a lightweight browser wallet extension with all shielded functionality.
 
 2. **Donation Features**:
    - Add a pre-configured “donate” button in the wallet for development support.
@@ -73,6 +86,12 @@ Development Roadmap
 3. **Hardware Wallet Integration**:
    - Support hardware wallets like Ledger/Trezor for signing shielded transactions using Rust libraries.
 
----
+4. **Fiat Onboarding**:
+   - Explore integrating fiat-to-crypto onboarding through providers like **DFX.swiss**
 
+5. **PiratePay**:
+   - Develop a PiratePay tab to purchase gift cards or prepaid Visa cards using Pirate Chain (leveraging services like Codego).
+
+6. **Atomic Swaps and Exchanges**:
+   - Investigate implementing atomic swaps and ARRR-BTC exchanges using Komodo Wallet’s MM2.
 
