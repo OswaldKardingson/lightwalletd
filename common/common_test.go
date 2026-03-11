@@ -63,13 +63,20 @@ func TestMain(m *testing.M) {
 		blockJSON, _ := json.Marshal(scan.Text())
 		blocks = append(blocks, blockJSON)
 	}
-	testcache = NewBlockCache(unitTestPath, unitTestChain, 380640, 0)
+	testMainPath, err := os.MkdirTemp("", "lightwalletd-common-testmain-")
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("Cannot create temp dir: %v", err))
+		os.Exit(1)
+	}
+	testcache = NewBlockCache(testMainPath, unitTestChain, 380640, 0)
 
 	// Setup is done; run all tests.
 	exitcode := m.Run()
 
 	// cleanup
 	os.Remove("test-log")
+	testcache.Close()
+	os.RemoveAll(testMainPath)
 
 	os.Exit(exitcode)
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/PirateNetwork/lightwalletd/parser"
 	"github.com/PirateNetwork/lightwalletd/walletrpc"
+	"github.com/golang/protobuf/proto"
 )
 
 var compacts []*walletrpc.CompactBlock
@@ -23,7 +24,11 @@ const (
 	unitTestChain = "unittestnet"
 )
 
-func TestCache(t *testing.T) {
+func ensureCompactsLoaded(t *testing.T) {
+	if len(compacts) > 0 {
+		return
+	}
+
 	type compactTest struct {
 		BlockHeight int    `json:"block"`
 		BlockHash   string `json:"hash"`
@@ -43,7 +48,6 @@ func TestCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Derive compact blocks from file data (setup, not part of the test).
 	for _, test := range compactTests {
 		blockData, _ := hex.DecodeString(test.Full)
 		block := parser.NewBlock()
@@ -56,6 +60,21 @@ func TestCache(t *testing.T) {
 		}
 		compacts = append(compacts, block.ToCompact())
 	}
+}
+
+func cloneCompactsWithStartHeight(startHeight int, count int) []*walletrpc.CompactBlock {
+	cloned := make([]*walletrpc.CompactBlock, 0, count)
+	for i := 0; i < count && i < len(compacts); i++ {
+		src := compacts[i]
+		block := proto.Clone(src).(*walletrpc.CompactBlock)
+		block.Height = uint64(startHeight + i)
+		cloned = append(cloned, block)
+	}
+	return cloned
+}
+
+func TestCache(t *testing.T) {
+	ensureCompactsLoaded(t)
 
 	// Pretend Sapling starts at 289460.
 	os.RemoveAll(unitTestPath)
@@ -96,6 +115,115 @@ func TestCache(t *testing.T) {
 	// Clean up the test files.
 	cache.Close()
 	os.RemoveAll(unitTestPath)
+}
+
+func TestCacheRestartCorruptLastBlock(t *testing.T) {
+	ensureCompactsLoaded(t)
+
+	testPath := t.TempDir()
+	cache = NewBlockCache(testPath, unitTestChain, 289460, 0)
+	fillCache(t)
+	cache.Sync()
+
+	lastHeight := cache.nextBlock - 1
+	lastOffset := cache.starts[lastHeight-cache.firstBlock]
+	blocksName := cache.blocksName
+	cache.Close()
+	blocksFile, err := os.OpenFile(blocksName, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocksFile.WriteAt([]byte{0x7f}, lastOffset+8); err != nil {
+		blocksFile.Close()
+		t.Fatal(err)
+	}
+	if err := blocksFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cache = NewBlockCache(testPath, unitTestChain, 289460, -1)
+	if cache.nextBlock != lastHeight {
+		t.Fatalf("unexpected nextBlock after restart corruption recovery: got %d want %d", cache.nextBlock, lastHeight)
+	}
+	if cache.GetLatestHeight() != lastHeight-1 {
+		t.Fatalf("unexpected latest height after restart corruption recovery: got %d want %d", cache.GetLatestHeight(), lastHeight-1)
+	}
+
+	cache.Close()
+}
+
+func TestCacheRestartCorruptFirstBlockRestartsFromStartHeight(t *testing.T) {
+	ensureCompactsLoaded(t)
+
+	const saplingHeight = 152855
+	testPath := t.TempDir()
+	localCompacts := cloneCompactsWithStartHeight(saplingHeight, 4)
+
+	cache = NewBlockCache(testPath, unitTestChain, saplingHeight, 0)
+	cache.Reorg(saplingHeight)
+	for i, compact := range localCompacts {
+		if err := cache.Add(saplingHeight+i, compact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cache.Sync()
+
+	blocksName := cache.blocksName
+	cache.Close()
+
+	blocksFile, err := os.OpenFile(blocksName, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocksFile.WriteAt([]byte{0x7f}, 8); err != nil {
+		blocksFile.Close()
+		t.Fatal(err)
+	}
+	if err := blocksFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cache = NewBlockCache(testPath, unitTestChain, saplingHeight, -1)
+	if cache.nextBlock != saplingHeight {
+		t.Fatalf("unexpected nextBlock after first-block corruption recovery: got %d want %d", cache.nextBlock, saplingHeight)
+	}
+	if cache.GetLatestHeight() != -1 {
+		t.Fatalf("unexpected latest height after first-block corruption recovery: got %d want -1", cache.GetLatestHeight())
+	}
+	if cache.latestHash != nil {
+		t.Fatal("expected latestHash to be nil after first-block corruption recovery")
+	}
+
+	cache.Close()
+}
+
+func TestCacheRestartWithDifferentConfiguredStartHeightUsesMetadata(t *testing.T) {
+	ensureCompactsLoaded(t)
+
+	testPath := t.TempDir()
+	cache = NewBlockCache(testPath, unitTestChain, 289460, 0)
+	fillCache(t)
+	cache.Sync()
+	cache.Close()
+
+	// Reopen the same cache files while configured with a different start height.
+	// The persisted cache metadata should preserve the original firstBlock so the
+	// cache continues instead of being reinterpreted as corrupt.
+	cache = NewBlockCache(testPath, unitTestChain, 289461, -1)
+	if cache.firstBlock != 289460 {
+		t.Fatalf("unexpected firstBlock after metadata restore: got %d want %d", cache.firstBlock, 289460)
+	}
+	if cache.nextBlock != 289466 {
+		t.Fatalf("unexpected nextBlock after metadata restore: got %d want %d", cache.nextBlock, 289466)
+	}
+	if cache.GetLatestHeight() != 289465 {
+		t.Fatalf("unexpected latest height after metadata restore: got %d want %d", cache.GetLatestHeight(), 289465)
+	}
+	if cache.latestHash == nil {
+		t.Fatal("expected latestHash to be preserved after metadata restore")
+	}
+
+	cache.Close()
 }
 
 func reorgCache(t *testing.T) {

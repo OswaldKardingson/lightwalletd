@@ -9,6 +9,7 @@ package common
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"hash/fnv"
 	"io"
 	"io/ioutil"
@@ -23,6 +24,7 @@ import (
 // BlockCache contains a consecutive set of recent compact blocks in marshalled form.
 type BlockCache struct {
 	lengthsName, blocksName string // pathnames
+	metaName                string
 	lengthsFile, blocksFile *os.File
 	starts                  []int64 // Starting offset of each block within blocksFile
 	firstBlock              int     // height of the first block in the cache (usually Sapling activation)
@@ -30,6 +32,14 @@ type BlockCache struct {
 	latestHash              []byte  // hash of the most recent (highest height) block, for detecting reorgs.
 	mutex                   sync.RWMutex
 }
+
+type blockCacheMeta struct {
+	Version    int    `json:"version"`
+	ChainName  string `json:"chain_name"`
+	FirstBlock int    `json:"first_block"`
+}
+
+const blockCacheMetaVersion = 1
 
 // GetNextHeight returns the height of the lowest unobtained block.
 func (c *BlockCache) GetNextHeight() int {
@@ -101,6 +111,36 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func (c *BlockCache) writeMeta() {
+	meta := blockCacheMeta{
+		Version:    blockCacheMetaVersion,
+		ChainName:  filepath.Base(filepath.Dir(c.blocksName)),
+		FirstBlock: c.firstBlock,
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		Log.Fatal("marshal cache metadata failed: ", err)
+	}
+	if err := os.WriteFile(c.metaName, data, 0644); err != nil {
+		Log.Fatal("write cache metadata failed: ", err)
+	}
+}
+
+func readBlockCacheMeta(metaName string) (*blockCacheMeta, error) {
+	data, err := os.ReadFile(metaName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var meta blockCacheMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 // Caller should hold c.mutex.Lock().
@@ -205,13 +245,24 @@ func (c *BlockCache) Reset(startHeight int) {
 // syncFromHeight < 0 means latest (tip) height.
 func NewBlockCache(dbPath string, chainName string, startHeight int, syncFromHeight int) *BlockCache {
 	c := &BlockCache{}
-	c.firstBlock = startHeight
-	c.nextBlock = startHeight
 	c.lengthsName, c.blocksName = dbFileNames(dbPath, chainName)
+	c.metaName = filepath.Join(dbPath, chainName, "cache-meta.json")
 	var err error
 	if err := os.MkdirAll(filepath.Join(dbPath, chainName), 0755); err != nil {
 		Log.Fatal("mkdir ", dbPath, " failed: ", err)
 	}
+	meta, err := readBlockCacheMeta(c.metaName)
+	if err != nil {
+		Log.Warning("cache metadata unreadable, recreating: ", err)
+	}
+	if meta != nil && meta.Version == blockCacheMetaVersion && meta.ChainName == chainName && meta.FirstBlock > 0 {
+		if meta.FirstBlock != startHeight {
+			Log.Warning("cache metadata firstBlock ", meta.FirstBlock, " overrides configured startHeight ", startHeight)
+		}
+		startHeight = meta.FirstBlock
+	}
+	c.firstBlock = startHeight
+	c.nextBlock = startHeight
 	c.blocksFile, err = os.OpenFile(c.blocksName, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		Log.Fatal("open ", c.blocksName, " failed: ", err)
@@ -223,6 +274,9 @@ func NewBlockCache(dbPath string, chainName string, startHeight int, syncFromHei
 	lengths, err := ioutil.ReadFile(c.lengthsName)
 	if err != nil {
 		Log.Fatal("read ", c.lengthsName, " failed: ", err)
+	}
+	if meta == nil || meta.Version != blockCacheMetaVersion || meta.ChainName != chainName || meta.FirstBlock != c.firstBlock {
+		c.writeMeta()
 	}
 	// 4 bytes per lengths[] value (block length)
 	if syncFromHeight >= 0 {
@@ -402,12 +456,12 @@ func (c *BlockCache) GetLiteWalletBlockGroup(height int) *walletrpc.BlockID {
 	}
 
 	for groupLength < targetLength {
-		 	groupLength += c.blockLength(height)
-			height++
-			if height >= c.nextBlock {
-					height--
-					break
-			}
+		groupLength += c.blockLength(height)
+		height++
+		if height >= c.nextBlock {
+			height--
+			break
+		}
 	}
 
 	block := c.readBlock(height)
